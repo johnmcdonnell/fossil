@@ -18,8 +18,7 @@ if typing.TYPE_CHECKING:
 import os
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
-
+from loguru import logger
 
 @functools.cache
 def create_database():
