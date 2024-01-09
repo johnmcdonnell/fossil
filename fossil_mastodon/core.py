@@ -9,8 +9,11 @@ import typing
 import html2text
 import llm
 import numpy as np
+import re
 
 import requests
+from openai import OpenAI
+import instructor
 
 from fossil_mastodon import config
 if typing.TYPE_CHECKING:
@@ -19,6 +22,8 @@ import os
 from pydantic import BaseModel
 
 from loguru import logger
+
+instructor_client = instructor.patch(OpenAI())
 
 @functools.cache
 def create_database():
@@ -298,11 +303,12 @@ def download_timeline(since: datetime.datetime):
         end_index = start_index + page_size
         page_toots = buffer[start_index:end_index]
 
-        # Example: Call the _create_embeddings function
+        tags = _create_tags(page_toots)
         _create_embeddings(page_toots)
         with sqlite3.connect(config.DATABASE_PATH) as conn:
             for toot in page_toots:
                 toot.save(init_conn=conn)
+
 
 
 def _create_embeddings(toots: list[Toot]):
@@ -320,6 +326,45 @@ def _create_embeddings(toots: list[Toot]):
 
     # Return the embeddings
     return toots
+
+class TootTags(BaseModel):
+    topic: str
+    is_polemical: bool
+    is_positive_valence: bool
+    is_negative_valence: bool
+    is_neutral_valence: bool
+    is_emotional_language: bool
+    is_political: bool
+    is_academic: bool
+    is_news: bool
+    is_cringe: bool
+    is_based: bool
+    is_israel_palestine: bool
+    is_joke: bool
+    is_art: bool
+    is_trolling: bool
+    is_opinion: bool
+    is_academic: bool
+    is_informative: bool
+
+def cleanup_toot_text(toot):
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', '', toot.content)
+    return f'{toot.display_name} posted: {text}'
+
+
+def _create_tags(toots: list[Toot]):
+    toot_tags = []
+    for toot in toots:
+        cleaned_text = cleanup_toot_text(toot)
+        toot_tagged = instructor_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                response_model=TootTags,
+                messages = [
+                    {"role": "user", "content": f"Classify the following text: {cleaned_text}" }
+                    ])
+        toot_tags.append(toot_tagged)
+    return toot_tags
 
 
 @functools.lru_cache()

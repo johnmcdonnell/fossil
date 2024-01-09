@@ -21,6 +21,7 @@ uvicorn = "^0.25.0"
 python-multipart = "^0.0.6"
 llm = "^0.12"
 loguru = "^0.7.2"
+instructor = "^0.4.6"
 
 # You can use this same format for installing your own plugins from a different project
 [tool.poetry.plugins."fossil_mastodon.algorithms"]
