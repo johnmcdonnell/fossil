@@ -51,197 +51,28 @@ def create_database():
         conn.commit()
 
 
-@functools.lru_cache()
-def _get_json(toot: "Toot") -> dict:
-    # meh, this isn't great, but it works
-    import json
-    return json.loads(toot.orig_json)
+Base = declarative_base()
 
+class Toot(Base):
+    __tablename__ = 'toots'
 
-class MediaAttatchment(BaseModel):
-    type: str | None
-    preview_url: str | None
-    url: str | None
+    instance_url = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True)
+    content = Column(String)
+    author = Column(String)
+    url = Column(String)
+    created_at = Column(DateTime)
+    embedding = Column(LargeBinary)
+    orig_json = Column(String)
+    cluster = Column(String)
 
-
-class Toot(BaseModel):
-    class Config:
-        arbitrary_types_allowed = True
-    id: int | None = None
-    content: str | None
-    author: str | None
-    url: str | None
-    created_at: datetime.datetime
-    embedding: np.ndarray | None = None
-    orig_json: str | None = None
-    cluster: str | None = None  # Added cluster property
-
-    @property
-    def orig_dict(self) -> dict:
-        return _get_json(self)
-
-    @property
-    def avatar_url(self) -> str | None:
-        return self.orig_dict.get("account", {}).get("avatar")
-    
-    @property
-    def profile_url(self) -> str | None:    
-        return self.orig_dict.get("account", {}).get("url")
-
-    @property
-    def display_name(self) -> str | None:
-        return self.orig_dict.get("account", {}).get("display_name")
-
-    @property
-    def toot_id(self) -> str | None:
-        return self.orig_dict.get("id")
-
-    @property
-    def is_reply(self) -> bool:
-        return self.orig_dict.get("in_reply_to_id") is not None
-
-    @property
-    def media_attachments(self) -> list[MediaAttatchment]:
-        return [MediaAttatchment(type=m.get("type"), url=m.get("url"), preview_url=m.get("preview_url")) 
-                for m in self.orig_dict.get("media_attachments", [])]
-
-    @property
-    def card_preview_url(self) -> str | None:
-        return self.orig_dict.get("card", {}).get("image")
-
-    @property
-    def card_url(self) -> str | None:
-        return self.orig_dict.get("card", {}).get("url")
-
-    def __hash__(self):
-        return hash(self.url)
-
-    def __eq__(self, other):
-        return self.url == other.url
-
-    def save(self, init_conn: sqlite3.Connection | None = None) -> bool:
-        try:
-            if init_conn is None:
-                conn = sqlite3.connect(config.DATABASE_PATH)
-            else:
-                conn = init_conn
-            create_database()
-            c = conn.cursor()
-
-            # Check if the URL already exists
-            c.execute('''
-                SELECT COUNT(*) FROM toots WHERE url = ? and embedding is not null
-            ''', (self.url,))
-
-            result = c.fetchone()
-            url_exists = result[0] > 0
-
-            if url_exists:
-                # URL already exists, handle accordingly
-                return False
-
-            c.execute('''
-                DELETE FROM toots WHERE url = ?
-            ''', (self.url,))
-
-            embedding = self.embedding.tobytes() if self.embedding is not None else bytes()
-            c.execute('''
-                INSERT INTO toots (content, author, url, created_at, embedding, orig_json, cluster)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (self.content, self.author, self.url, self.created_at, embedding, self.orig_json, self.cluster))
-
-        except:
-            conn.rollback()
-            raise
-        finally:
-            if init_conn is None:
-                conn.commit()
-        return True
-
-    @classmethod
-    def get_toots_since(cls, since: datetime.datetime) -> list["Toot"]:
-        create_database()
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
-            c = conn.cursor()
-
-            c.execute('''
-                SELECT 
-                    id, content, author, url, created_at, embedding, orig_json, cluster
-                FROM toots WHERE created_at >= ?
-            ''', (since,))
-
-            rows = c.fetchall()
-            toots = []
-            for row in rows:
-                toot = cls(
-                    id=row[0],
-                    content=row[1],
-                    author=row[2],
-                    url=row[3],
-                    created_at=row[4],
-                    embedding=np.frombuffer(row[5]) if row[5] else None,
-                    orig_json=row[6],
-                    cluster=row[7]  # Added cluster property
-                )
-                toots.append(toot)
-
-            return toots
-
-    @classmethod
-    def get_by_id(cls, id: int) -> Optional["Toot"]:
-        create_database()
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
-            c = conn.cursor()
-
-            c.execute('''
-                SELECT 
-                    id, content, author, url, created_at, embedding, orig_json, cluster
-                FROM toots WHERE id = ?
-            ''', (id,))
-
-            row = c.fetchone()
-            if row:
-                toot = cls(
-                    id=row[0],
-                    content=row[1],
-                    author=row[2],
-                    url=row[3],
-                    created_at=row[4],
-                    embedding=np.frombuffer(row[5]) if row[5] else None,
-                    orig_json=row[6],
-                    cluster=row[7],  # Added cluster property
-                )
-                return toot
-            return None
-
-    @staticmethod
-    def get_latest_date() -> datetime.datetime | None:
-        create_database()
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
-            c = conn.cursor()
-
-            c.execute('''
-                SELECT MAX(created_at) FROM toots
-            ''')
-
-            result = c.fetchone()
-            latest_date = result[0] if result[0] else None
-
-            if isinstance(latest_date, str):
-                try:
-                    latest_date = datetime.datetime.strptime(latest_date, "%Y-%m-%d %H:%M:%S.%f")
-                except ValueError:
-                    latest_date = datetime.datetime.strptime(latest_date, "%Y-%m-%d %H:%M:%S")
-            return latest_date
-
-    @classmethod
-    def from_dict(cls, data):
+    def from_dict(self, data):
         import json
 
         if data.get("reblog"):
-            return cls.from_dict(data["reblog"])
+            return self.from_dict(data["reblog"])
 
-        return cls(
+        return self(
             content=data.get("content"),
             author=data.get("account", {}).get("acct"),
             url=data.get("url"),
@@ -249,12 +80,12 @@ class Toot(BaseModel):
             orig_json=json.dumps(data),
         )
 
-    def do_star(self):
-        print("star", self.url)
+    def get_toots_since(self, since: datetime.datetime):
+        return self.query.filter(self.created_at > since).all()
 
-    def do_boost(self):
-        print("boost", self.url)
 
+engine = create_engine('sqlite:///fossil_mastodon.db')
+Base.metadata.create_all(engine)
 
 def get_toots_since(since: datetime.datetime):
     assert isinstance(since, datetime.datetime), type(since)
